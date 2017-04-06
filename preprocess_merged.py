@@ -70,6 +70,10 @@ def cleanText(text):
             wordList.append(word)
     return wordList
 
+"""
+Considered data in following order:
+Text, Subreddit ID, Number of gilds, Distinguished, Controversiality
+"""
 def getDataScorePair(oneRow):
     considered = []
     subredditId = oneRow[2]
