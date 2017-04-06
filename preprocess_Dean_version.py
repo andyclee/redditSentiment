@@ -23,11 +23,44 @@ def isEnglish(text):
         return False
     else:
         return True
-
+        
 def stripPunctuation(str_in):
     # Strip punctuation from word
     return re.sub('[%s]' % re.escape(string.punctuation), '', str_in)
 
+"""
+Make sure comment contains all proper fields
+and that fields are of expected data type
+"""
+def validateComment(comment):
+    score = comment[0]
+    params = comment[1]
+
+    try:
+        score = int(score)
+        subredditId = str(params[1])
+        gilded = int(params[2])
+        distinguished = str(params[3])
+        controversiality = int(params[4])
+
+        # not sure its range
+        # if (gilded != 0 and gilded != 1):
+        #     return False
+        # distinguished is a string, see reddit api reference
+        # if (dist != 0 and dist != 1):
+        #     return False
+        # not sure its range
+        # if (contr != 0 and (contr != 1) ):
+        #     return False
+
+        return True
+
+    except:
+        return False
+
+"""
+Clean the comment body text
+"""
 def cleanText(text):
     wordList = []
     text = stripPunctuation(text.lower())
@@ -38,21 +71,32 @@ def cleanText(text):
     return wordList
 
 def getDataScorePair(oneRow):
+    considered = []
+    subredditId = oneRow[2]
+    gilded = oneRow[11]
+    distinguished = oneRow[-4]
+    controversiality = oneRow[-2]
     body = oneRow[17]
+    cleanedBody = cleanText(body)
+
+    considered.append(cleanedBody)
+    considered.append(subredditId)
+    considered.append(gilded)
+    considered.append(distinguished)
+    considered.append(controversiality)
     score = oneRow[15]
-    cleanedText = cleanText(body)
-    return (cleanedText, score)
+
+    return (considered, score)
 
 redditData = sc.textFile("reddit.csv")
 header = redditData.first()
 
+# parse csv input into rows of list
 redditData = redditData.filter(lambda x: x != header).map(parse_csv)
 
-# index 17 is the column for body text
-# length 22 is the length of one complete row, since it seems replace('\n')
-# function works strangely when encounter non-english strings
-
+"""
+    index 17 is the column for body text
+    length 22 is the length of one complete row, since it seems replace('\n')
+    function works strangely when encounter non-english strings
+"""
 textScorePair = redditData.filter(lambda x: len(x) == 22 and isEnglish(x[17])).map(lambda x: getDataScorePair(x))
-
-# sample output
-[(['gg', 'ones', 'watch', 'nfl', 'draft', 'guess'], '4'), (['really', 'implying', 'return', 'times', 'anywhere', 'near', 'political', 'environment', 'wont', 'much', 'luck', 'selling', 'american', 'people', 'governance', 'concept', 'without', 'ushering', 'american', 'revolution', '20'], '0'), (['one', 'european', 'accent', 'either', 'doesnt', 'exist', 'accents', 'europe', 'european', 'accent'], '3'), (['kid', 'reminds', 'kevin', 'sad'], '3'), (['haha', 'getting', 'nauseous', 'ingame', 'experience', 'would', 'given', 'whole', 'new', 'level', 'bloodborne'], '1'), (['lets', 'see', 'guys', 'side'], '2'), (['buy', 'mystery', 'sampler', 'small', 'batch', 'request'], '6'), (['nihilum', 'lg', 'significantly', 'better', 'theory', 'cant', 'really', 'think', 'replacement', 'ptr', 'would', 'leave', 'clg', 'better', 'place', 'cloud9', 'much', 'better', 'never', 'know'], '5'), (['fuck'], '4'), (['dont', 'diss', 'grim', 'puncher'], '1')]
