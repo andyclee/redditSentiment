@@ -29,36 +29,6 @@ def stripPunctuation(str_in):
     return re.sub('[%s]' % re.escape(string.punctuation), '', str_in)
 
 """
-Make sure comment contains all proper fields
-and that fields are of expected data type
-"""
-def validateComment(comment):
-    score = comment[0]
-    params = comment[1]
-
-    try:
-        score = int(score)
-        subredditId = str(params[1])
-        gilded = int(params[2])
-        distinguished = str(params[3])
-        controversiality = int(params[4])
-
-        # not sure its range
-        # if (gilded != 0 and gilded != 1):
-        #     return False
-        # distinguished is a string, see reddit api reference
-        # if (dist != 0 and dist != 1):
-        #     return False
-        # not sure its range
-        # if (contr != 0 and (contr != 1) ):
-        #     return False
-
-        return True
-
-    except:
-        return False
-
-"""
 Clean the comment body text
 """
 def cleanText(text):
