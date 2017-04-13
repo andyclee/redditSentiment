@@ -1,5 +1,5 @@
-corresponding to 
-varience , root mean square error on training set; 
+corresponding to
+varience , root mean square error on training set;
 varience , root mean square error on test set
 
 LinearRegressionWithSGD

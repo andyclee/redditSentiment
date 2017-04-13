@@ -1,13 +1,20 @@
 from pyspark import SparkContext, SparkConf
+from pyspark.sql import SQLContext
+from pyspark.sql import HiveContext
 from pyspark.mllib.feature import HashingTF, IDF
 from pyspark.mllib.regression import LabeledPoint
 from pyspark.mllib.regression import LinearRegressionWithSGD
 from pyspark.mllib.regression import RidgeRegressionWithSGD
 from pyspark.mllib.regression import LassoWithSGD
 from pyspark.mllib.evaluation import RegressionMetrics
-from pyspark.mllib.linalg import SparseVector
+from pyspark.ml.feature import VectorAssembler
+from pyspark.sql.types import StructType, StructField
+from pyspark.sql import Row
+from pyspark.sql.window import Window
+from pyspark.sql.functions import rowNumber
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
+from pyspark.mllib.linalg import VectorUDT
 import csv
 import string
 import re
@@ -15,6 +22,8 @@ import numpy as np
 conf = SparkConf().setAppName("NLP on Reddit Data")
 sc = SparkContext(conf=conf)
 
+# notice here we use HiveContext(sc) because window functions require HiveContext
+sqlContext = HiveContext(sc)
 stopwordsList = stopwords.words('english')
 
 def parse_csv(x):
@@ -88,25 +97,6 @@ def getDataScorePair(oneRow):
 
     return (considered, score)
 
-"""
-add controversiality, gilded, and distinguished to the end of computed tfidf
-"""
-def combineFeatures(x):
-
-    # x[1] is the computed tfidf sparse vector
-    idxes = x[1].indices
-    values = x[1].values
-    length = x[1].size
-
-    # append features
-    idxes = np.append(idxes, length)
-    idxes = np.append(idxes, length+1)
-    idxes = np.append(idxes, length+2)
-    values = np.append(values, x[0][0])
-    values = np.append(values, x[0][1])
-    values = np.append(values, x[0][2])
-    return SparseVector(length + 3, idxes, values)
-
 redditData = sc.textFile("/user/jl28/reddit.csv")
 redditData = sc.parallelize(redditData.take(10000))
 header = redditData.first()
@@ -119,23 +109,42 @@ redditData = redditData.filter(lambda x: x != header).map(parse_csv)
     length 22 is the length of one complete row, since it seems replace('\n')
     function works strangely when encounter non-english strings
 """
+# Drop non-english rows and ensure the result data is not malformed, then get data score pair and ensure the score is invalid
 textScorePair = redditData.filter(lambda x: len(x) == 22 and isEnglish(x[17])).map(lambda x: getDataScorePair(x)).filter(lambda x: isInt(x[1]))
 
-texts = textScorePair.map(lambda x:x[0][0])
-scores = textScorePair.map(lambda x: x[1])
-
 # perform tf-idf on texts
+texts = textScorePair.map(lambda x:x[0][0])
 tf = HashingTF().transform(texts)
 idf = IDF(minDocFreq=5).fit(tf)
 tfidf = idf.transform(tf)
 
-otherFeatures = textScorePair.map(lambda x: [x[0][2],x[0][3],x[0][4]])
-combinedFeatures = features.zip(tfidf).map(lambda x: combineFeatures(x))
+# build dataframe with column shown in schema, the reason to build data frame is that VectorAssembler's input should be two column in dataframe
+schema = 'score,gilded,distinguished,controversiality'.split(',')
+itemsForDataFrame = textScorePair.map(lambda x: [x[1], x[0][2], x[0][3], x[0][4]])
+otherFeaturesDF = sqlContext.createDataFrame(itemsForDataFrame, schema)
 
-zipped_data = (scores.zip(newFeatures)
+# build datafame for tf_idf, same reason as above
+tfidfSchema = StructType([StructField("tf_idf", VectorUDT(), True)])
+row = Row("tf_idf")
+tfidfDF = tfidf.map(lambda x: row(x)).toDF(tfidfSchema)
+
+# add row number to the two dataframe, in order to perform a join
+w = Window().orderBy()
+otherFeaturesDF =  otherFeaturesDF.withColumn("columnindex", rowNumber().over(w))
+tfidfDF =  tfidfDF.withColumn("columnindex", rowNumber().over(w))
+
+mergedDF = otherFeaturesDF.join(tfidfDF, otherFeaturesDF.columnindex == tfidfDF.columnindex, 'inner')
+
+# assemble the tf-idf and other features to form a single vector
+assembler = VectorAssembler(inputCols=["tf_idf", "gilded", "distinguished", "controversiality"],outputCol="features")
+mergedDF = assembler.transform(mergedDF)
+
+features = mergedDF.map(lambda x: x[7])
+scores = mergedDF.map(lambda x: x[0])
+zipped_data = (scores.zip(features)
                      .map(lambda x: LabeledPoint(x[0], x[1]))
                      .cache())
-
+                     
 # Do a random split so we can test our model on non-trained data
 training, test = zipped_data.randomSplit([0.7, 0.3])
 
