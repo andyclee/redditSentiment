@@ -67,9 +67,6 @@ def cleanText(text):
 """
 Considered data in following order:
 Text, Subreddit ID, Number of gilds, Distinguished, Controversiality
-Scaled the distinguished to: "" -> 0, "moderator" -> 20, "admin" -> 30, "other" -> 10
-Scaled gilded to gilded * 10
-Scaled the controversiality to controversiality * 10
 """
 def getDataScorePair(oneRow):
     considered = []
@@ -79,20 +76,20 @@ def getDataScorePair(oneRow):
     if distinguished == '':
         distinguished = 0
     elif distinguished == 'moderator':
-        distinguished = 20
+        distinguished = 2
     elif distinguished == 'admin':
-        distinguished = 30
+        distinguished = 3
     else:
-        distinguished = 10
+        distinguished = 1
     controversiality = oneRow[-2]
     body = oneRow[17]
     cleanedBody = cleanText(body)
 
     considered.append(cleanedBody)
     considered.append(subredditId)
-    considered.append(int(gilded) * 10)
+    considered.append(int(gilded))
     considered.append(distinguished)
-    considered.append(int(controversiality)*10)
+    considered.append(int(controversiality))
     score = oneRow[15]
 
     return (considered, score)
@@ -139,12 +136,14 @@ mergedDF = otherFeaturesDF.join(tfidfDF, otherFeaturesDF.columnindex == tfidfDF.
 assembler = VectorAssembler(inputCols=["tf_idf", "gilded", "distinguished", "controversiality"],outputCol="features")
 mergedDF = assembler.transform(mergedDF)
 
-features = mergedDF.map(lambda x: x[7])
-scores = mergedDF.map(lambda x: x[0])
+scoreFeaturesPair = mergedDF.map(lambda x: (x[7],x[0])).repartition(100)
+features = scoreFeaturesPair.map(lambda x: x[0])
+scores = scoreFeaturesPair.map(lambda x: x[1])
+
 zipped_data = (scores.zip(features)
                      .map(lambda x: LabeledPoint(x[0], x[1]))
                      .cache())
-                     
+
 # Do a random split so we can test our model on non-trained data
 training, test = zipped_data.randomSplit([0.7, 0.3])
 
