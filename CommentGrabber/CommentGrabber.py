@@ -14,7 +14,10 @@ import praw
 import time
 import threading
 import uuid
-from pprint import pprint
+import sys
+import re
+import string
+import os
 
 reddit = praw.Reddit('bot1')
 
@@ -41,11 +44,11 @@ def getCommentIDs(commentQ):
         try:
             requestWait = 2
             commentIDs = []
-            for comment in reddit.subreddit('all').comments(limit=100):
+            for comment in reddit.subreddit('all').comments(limit=2):
                 commentIDs.append(comment.id)
-                commentQ.put(commentIDs)
                 time.sleep(requestWait)
-
+            commentQ.put(commentIDs)
+            print("Comment Queue size: " + commenQ.getSize())
             currentIter += 1
         except:
             currentIter += 1
@@ -55,41 +58,44 @@ def writeComments(commentQ):
     testLimit = 3
     currentIter = 0
     while currentIter < testLimit:
-        print("Attempting to write comment to file")
         try:
             comments = commentQ.pop()
             filename = str(uuid.uuid4()) + ".txt"
             commentCSV = ""
             for commentID in comments:
                 currentComment = reddit.comment(commentID)
+                redditIsLazy = currentComment.body
+                print(redditIsLazy)
                 commentInfo = vars(currentComment)
                 row = createRow(commentInfo)
                 commentCSV += row
 
-            with open(filename, 'w') as f:
+            with open(os.path.join("./comments", filename), 'w') as f:
+                print("Writing to file: " + filename)
                 f.write(commentCSV)
 
             currentIter += 1
-        except:
-            currentIter += 1
+        except IndexError:
             pass
 
 def createRow(commentInfo):
     currentRow = ""
     currentRow += stripPunctuation(commentInfo['body']) + ","
     currentRow += commentInfo['subreddit_id'] + ","
-    currentRow += commentInfo['gilded'] + ","
+    currentRow += str(commentInfo['gilded']) + ","
     if commentInfo['distinguished'] == None:
         currentRow += ","
     else:
-        currentRow += commentInfo['distinguished'] + ","
-    currentRow += commmentInfo['controversiality'] + "\n"
+        currentRow += str(commentInfo['distinguished']) + ","
+    currentRow += str(commentInfo['controversiality']) + "\n"
 
     return currentRow
 
 def stripPunctuation(str_in):
     # Strip punctuation from word
-    return re.sub('[%s]' % re.escape(string.punctuation), '', str_in)
+    noPunc = re.sub('[%s]' % re.escape(string.punctuation), '', str_in)
+    noNL = noPunc.replace('\n', '').replace('\r', '')
+    return noNL
 
 def collectAndWrite():
     commentQ = commentQueue()
