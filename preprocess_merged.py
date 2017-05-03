@@ -95,7 +95,7 @@ def getDataScorePair(oneRow):
     return (considered, score)
 
 redditData = sc.textFile("/user/jl28/reddit.csv")
-redditData = sc.parallelize(redditData.take(10000))
+#redditData = sc.parallelize(redditData.take(10000))
 header = redditData.first()
 
 # parse csv input into rows of list
@@ -107,7 +107,7 @@ redditData = redditData.filter(lambda x: x != header).map(parse_csv)
     function works strangely when encounter non-english strings
 """
 # Drop non-english rows and ensure the result data is not malformed, then get data score pair and ensure the score is invalid
-textScorePair = redditData.filter(lambda x: len(x) == 22 and isEnglish(x[17])).map(lambda x: getDataScorePair(x)).filter(lambda x: isInt(x[1]))
+textScorePair = redditData.filter(lambda x: len(x) == 22 and isEnglish(x[17]) and isInt(x[-2]) and isInt(x[11])).map(lambda x: getDataScorePair(x)).filter(lambda x: isInt(x[1]))
 
 # perform tf-idf on texts
 texts = textScorePair.map(lambda x:x[0][0])
@@ -136,6 +136,7 @@ mergedDF = otherFeaturesDF.join(tfidfDF, otherFeaturesDF.columnindex == tfidfDF.
 assembler = VectorAssembler(inputCols=["tf_idf", "gilded", "distinguished", "controversiality"],outputCol="features")
 mergedDF = assembler.transform(mergedDF)
 
+# need repartition after use window function
 scoreFeaturesPair = mergedDF.map(lambda x: (x[7],x[0])).repartition(100)
 features = scoreFeaturesPair.map(lambda x: x[0])
 scores = scoreFeaturesPair.map(lambda x: x[1])
