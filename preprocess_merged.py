@@ -6,7 +6,10 @@ from pyspark.mllib.regression import LabeledPoint
 from pyspark.mllib.regression import LinearRegressionWithSGD
 from pyspark.mllib.regression import RidgeRegressionWithSGD
 from pyspark.mllib.regression import LassoWithSGD
+from pyspark.mllib.tree import DecisionTree
+from pyspark.mllib.tree import RandomForest
 from pyspark.mllib.evaluation import RegressionMetrics
+from pyspark.mllib.tree import GradientBoostedTrees
 from pyspark.ml.feature import VectorAssembler
 from pyspark.sql.types import StructType, StructField
 from pyspark.sql import Row
@@ -19,7 +22,9 @@ import csv
 import string
 import re
 import numpy as np
+from pyspark.mllib.stat import Statistics
 conf = SparkConf().setAppName("NLP on Reddit Data")
+conf.set("spark.driver.maxResultSize", "3g")
 sc = SparkContext(conf=conf)
 
 # notice here we use HiveContext(sc) because window functions require HiveContext
@@ -51,6 +56,16 @@ def stripPunctuation(str_in):
     # Strip punctuation from word
     return re.sub('[%s]' % re.escape(string.punctuation), '', str_in)
 
+def reachSampleLimit(score):
+    if score in frequencyCount:
+        if frequencyCount[score] > 300:
+            return True
+        else:
+            frequencyCount[score] += 1
+            return False
+    else:
+        frequencyCount[score] = 1
+        return False
 
 """
 Clean the comment body text
@@ -67,6 +82,8 @@ def cleanText(text):
 """
 Considered data in following order:
 Text, Subreddit ID, Number of gilds, Distinguished, Controversiality
+Scaled the distinguished to: "" -> 0, "moderator" -> 2, "admin" -> 3, "other" -> 1
+Scaled gilded to gilded * 10
 """
 def getDataScorePair(oneRow):
     considered = []
@@ -84,18 +101,17 @@ def getDataScorePair(oneRow):
     controversiality = oneRow[-2]
     body = oneRow[17]
     cleanedBody = cleanText(body)
-
     considered.append(cleanedBody)
     considered.append(subredditId)
-    considered.append(int(gilded))
+    considered.append(int(gilded) * 10)
     considered.append(distinguished)
     considered.append(int(controversiality))
-    score = oneRow[15]
+    score = int(oneRow[15])
 
     return (considered, score)
 
-redditData = sc.textFile("/user/jl28/reddit.csv")
-#redditData = sc.parallelize(redditData.take(10000))
+redditData = sc.textFile("/user/jl28/reddit.csv", 500)
+redditData = sc.parallelize(redditData.take(400000), 500)
 header = redditData.first()
 
 # parse csv input into rows of list
@@ -107,7 +123,16 @@ redditData = redditData.filter(lambda x: x != header).map(parse_csv)
     function works strangely when encounter non-english strings
 """
 # Drop non-english rows and ensure the result data is not malformed, then get data score pair and ensure the score is invalid
-textScorePair = redditData.filter(lambda x: len(x) == 22 and isEnglish(x[17]) and isInt(x[-2]) and isInt(x[11])).map(lambda x: getDataScorePair(x)).filter(lambda x: isInt(x[1]))
+textScorePair = redditData.filter(lambda x: len(x) == 22 and isEnglish(x[17]) and isInt(x[11]) and isInt(x[-2]) and isInt(x[15])).map(lambda x: getDataScorePair(x)).filter(lambda x: (x[1] < 100 and x[1] > -100)).collect()
+
+frequencyCount = {}
+samplesFiltered = []
+for item in textScorePair:
+    if (not reachSampleLimit(item[1])):
+        samplesFiltered.append(item)
+
+print (frequencyCount)
+textScorePair = sc.parallelize(samplesFiltered,500)
 
 # perform tf-idf on texts
 texts = textScorePair.map(lambda x:x[0][0])
@@ -135,11 +160,10 @@ mergedDF = otherFeaturesDF.join(tfidfDF, otherFeaturesDF.columnindex == tfidfDF.
 # assemble the tf-idf and other features to form a single vector
 assembler = VectorAssembler(inputCols=["tf_idf", "gilded", "distinguished", "controversiality"],outputCol="features")
 mergedDF = assembler.transform(mergedDF)
-
-# need repartition after use window function
-scoreFeaturesPair = mergedDF.map(lambda x: (x[7],x[0])).repartition(100)
+mergedDF.show()
+scoreFeaturesPair = mergedDF.map(lambda x: (x[7],x[0])).repartition(500)
 features = scoreFeaturesPair.map(lambda x: x[0])
-scores = scoreFeaturesPair.map(lambda x: x[1])
+scores = scoreFeaturesPair.map(lambda x: int(x[1]))
 
 zipped_data = (scores.zip(features)
                      .map(lambda x: LabeledPoint(x[0], x[1]))
@@ -149,7 +173,8 @@ zipped_data = (scores.zip(features)
 training, test = zipped_data.randomSplit([0.7, 0.3])
 
 # Train our model
-model = LinearRegressionWithSGD.train(training)
+model = RandomForest.trainRegressor(training, {1048577: 4, 1048578: 2},10)
+#model = LinearRegressionWithSGD.train(training)
 
 # Use our model to predict
 train_preds = (training.map(lambda x: x.label)
@@ -161,8 +186,11 @@ test_preds = (test.map(lambda x: x.label)
 trained_metrics = RegressionMetrics(train_preds.map(lambda x: (float(x[1]),x[0])))
 test_metrics = RegressionMetrics(test_preds.map(lambda x: (float(x[1]),x[0])))
 
-with open('result.txt', 'w+') as f:
+with open('reSampleResult2.txt', 'w+') as f:
     f.write(str(trained_metrics.explainedVariance) + '\n')
     f.write(str(trained_metrics.rootMeanSquaredError) + '\n')
+    f.write(str(trained_metrics.r2) + '\n')
     f.write(str(test_metrics.explainedVariance) + '\n')
     f.write(str(test_metrics.rootMeanSquaredError) + '\n')
+    f.write(str(test_metrics.r2) + '\n')
+    f.write(str(frequencyCount) + '\n')
